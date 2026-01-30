@@ -20,7 +20,7 @@
 // --- CONFIGURAÇÕES GLOBAIS ---
 const char* WIFI_SSID = "ERUS 2.4GHz";           
 const char* WIFI_PASSWORD = "ultrabots3";     
-const char* MQTT_SERVER = "192.168.0.110"; // IP Local do Broker (Notebook)
+const char* MQTT_SERVER = "192.168.0.117"; // IP Local do Broker (Notebook)
 const int MQTT_PORT = 1883;
 const char* MQTT_TOPIC_BPM = "health/bpm";   
 const char* MQTT_USER = "pulse";      
