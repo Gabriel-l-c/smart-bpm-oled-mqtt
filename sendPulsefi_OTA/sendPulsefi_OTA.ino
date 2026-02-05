@@ -1,19 +1,13 @@
 //-------------------------------------------------------------
-// FREQ + SENSOR + MICRO + NÃO MENOR QUE 58 BPM COM MQTT PUBLISHER + OTA
+// FREQ + SENSOR + MICRO + NÃO MENOR QUE 58 BPM COM MQTT PUBLISHER + OTA WiFi
 /*
-  Monitor de Frequência Cardíaca (MAX30105) - Versão Não-Bloqueante com MQTT e OTA
+  Monitor de Frequência Cardíaca (MAX30105) - Versão com OTA para WiFi
 
   Objetivo:
   - Medição e cálculo do BPM (beatAvg).
   - Pulsação do LED controlada pelo BPM médio (beatAvg).
   - Envio do beatAvg via MQTT para outro dispositivo (Subscriber).
-  - Atualização OTA (Over-The-Air) para facilitar updates remotos.
-  
-  Como usar o OTA:
-  1. Após o primeiro upload via cabo USB, o ESP32 estará disponível para OTA
-  2. No Arduino IDE, vá em: Ferramentas > Porta > Selecione o IP do ESP32 na rede
-  3. Ou use: Tools > Port > Network Port (ESP32-SENDER at 192.168.x.x)
-  4. Faça o upload normalmente - será feito via WiFi!
+  - **NOVO**: Atualização OTA de SSID, Senha WiFi e IP do Broker MQTT
 */
 
 // --- INCLUDES ---
@@ -22,22 +16,24 @@
 #include "heartRate.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <Preferences.h>
+#include <WebServer.h>
 #include <ESPmDNS.h>
-#include <WiFiUdp.h>
-#include <ArduinoOTA.h>
 
-// --- CONFIGURAÇÕES GLOBAIS ---
-const char* WIFI_SSID = "ERUS 2.4GHz";           
-const char* WIFI_PASSWORD = "ultrabots3";     
-const char* MQTT_SERVER = "192.168.0.117"; // IP Local do Broker (Notebook)
+// --- OBJETO PREFERENCES PARA SALVAR CREDENCIAIS ---
+Preferences preferences;
+
+// --- CONFIGURAÇÕES PADRÃO (Fallback) ---
+String WIFI_SSID = "Gabriel";           
+String WIFI_PASSWORD = "12345678";     
+String MQTT_SERVER = "172.20.10.2"; 
 const int MQTT_PORT = 1883;
 const char* MQTT_TOPIC_BPM = "health/bpm";   
 const char* MQTT_USER = "pulse";      
 const char* MQTT_PASS = "pulse10"; 
 
-// Configurações OTA
-const char* OTA_HOSTNAME = "ESP32-SENDER";  // Nome que aparecerá na rede
-const char* OTA_PASSWORD = "pulse123";      // Senha para proteger updates OTA
+// --- WEB SERVER PARA CONFIGURAÇÃO OTA ---
+WebServer server(80);
 
 // --- DECLARAÇÕES DE OBJETOS ---
 WiFiClient espClient;
@@ -66,6 +62,133 @@ unsigned long lastMsg = 0;
 const long MQTT_INTERVAL = 5000; 
 
 // ----------------------------------------------------------------------------------
+// --- Funções de Gerenciamento de Configurações ---
+// ----------------------------------------------------------------------------------
+
+void loadConfig() {
+  preferences.begin("wifi-config", false);
+  
+  // Carrega SSID (se existir)
+  if (preferences.isKey("ssid")) {
+    WIFI_SSID = preferences.getString("ssid", "Gabriel");
+  }
+  
+  // Carrega Password (se existir)
+  if (preferences.isKey("password")) {
+    WIFI_PASSWORD = preferences.getString("password", "12345678");
+  }
+  
+  // Carrega MQTT Server (se existir)
+  if (preferences.isKey("mqtt_server")) {
+    MQTT_SERVER = preferences.getString("mqtt_server", "172.20.10.2");
+  }
+  
+  preferences.end();
+  
+  Serial.println("=== Configurações Carregadas ===");
+  Serial.print("SSID: ");
+  Serial.println(WIFI_SSID);
+  Serial.print("MQTT Server: ");
+  Serial.println(MQTT_SERVER);
+}
+
+void saveConfig(String ssid, String password, String mqtt_server) {
+  preferences.begin("wifi-config", false);
+  
+  preferences.putString("ssid", ssid);
+  preferences.putString("password", password);
+  preferences.putString("mqtt_server", mqtt_server);
+  
+  preferences.end();
+  
+  Serial.println("=== Configurações Salvas ===");
+  Serial.print("SSID: ");
+  Serial.println(ssid);
+  Serial.print("MQTT Server: ");
+  Serial.println(mqtt_server);
+}
+
+// ----------------------------------------------------------------------------------
+// --- Páginas Web para Configuração ---
+// ----------------------------------------------------------------------------------
+
+void handleRoot() {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='UTF-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<title>Configuração WiFi - Pulse Monitor</title>";
+  html += "<style>";
+  html += "body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #f0f0f0; }";
+  html += "h1 { color: #333; text-align: center; }";
+  html += ".card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }";
+  html += "label { display: block; margin-top: 15px; font-weight: bold; color: #555; }";
+  html += "input { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }";
+  html += "button { width: 100%; padding: 12px; margin-top: 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }";
+  html += "button:hover { background: #45a049; }";
+  html += ".info { background: #e3f2fd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }";
+  html += ".current { color: #1976d2; font-weight: bold; }";
+  html += "</style>";
+  html += "</head><body>";
+  html += "<div class='card'>";
+  html += "<h1>⚙️ Configuração WiFi OTA</h1>";
+  html += "<div class='info'>";
+  html += "<p><strong>Configurações Atuais:</strong></p>";
+  html += "<p>SSID: <span class='current'>" + WIFI_SSID + "</span></p>";
+  html += "<p>MQTT Server: <span class='current'>" + MQTT_SERVER + "</span></p>";
+  html += "</div>";
+  html += "<form action='/save' method='POST'>";
+  html += "<label>SSID da Rede WiFi:</label>";
+  html += "<input type='text' name='ssid' value='" + WIFI_SSID + "' required>";
+  html += "<label>Senha WiFi:</label>";
+  html += "<input type='password' name='password' value='" + WIFI_PASSWORD + "' required>";
+  html += "<label>IP do Broker MQTT:</label>";
+  html += "<input type='text' name='mqtt_server' value='" + MQTT_SERVER + "' required>";
+  html += "<button type='submit'>💾 Salvar e Reiniciar</button>";
+  html += "</form>";
+  html += "</div>";
+  html += "</body></html>";
+  
+  server.send(200, "text/html", html);
+}
+
+void handleSave() {
+  if (server.hasArg("ssid") && server.hasArg("password") && server.hasArg("mqtt_server")) {
+    String newSSID = server.arg("ssid");
+    String newPassword = server.arg("password");
+    String newMQTTServer = server.arg("mqtt_server");
+    
+    // Salva as novas configurações
+    saveConfig(newSSID, newPassword, newMQTTServer);
+    
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'>";
+    html += "<style>";
+    html += "body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }";
+    html += ".success { background: white; padding: 30px; border-radius: 10px; max-width: 500px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }";
+    html += "h1 { color: #4CAF50; }";
+    html += "</style>";
+    html += "</head><body>";
+    html += "<div class='success'>";
+    html += "<h1>✅ Configurações Salvas!</h1>";
+    html += "<p>O ESP32 irá reiniciar em 3 segundos...</p>";
+    html += "<p>Conecte-se à nova rede WiFi para acessar novamente.</p>";
+    html += "</div>";
+    html += "</body></html>";
+    
+    server.send(200, "text/html", html);
+    
+    delay(3000);
+    ESP.restart();
+  } else {
+    server.send(400, "text/plain", "Erro: Parâmetros inválidos");
+  }
+}
+
+void handleNotFound() {
+  server.send(404, "text/plain", "Página não encontrada");
+}
+
+// ----------------------------------------------------------------------------------
 // --- Funções Auxiliares ---
 // ----------------------------------------------------------------------------------
 
@@ -75,71 +198,33 @@ void setup_wifi() {
   Serial.print("Connecting to ");
   Serial.println(WIFI_SSID);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
 
-  while (WiFi.status() != WL_CONNECTED) {
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
     delay(500);
     Serial.print(".");
+    attempts++;
   }
 
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void setup_ota() {
-  // Configurações do ArduinoOTA
-  ArduinoOTA.setHostname(OTA_HOSTNAME);
-  ArduinoOTA.setPassword(OTA_PASSWORD);
-
-  // Callbacks para monitorar o processo OTA
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else { // U_SPIFFS
-      type = "filesystem";
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    
+    // Inicia mDNS para acessar via http://pulse-sender.local
+    if (MDNS.begin("pulse-sender")) {
+      Serial.println("mDNS started: http://pulse-sender.local");
     }
-    Serial.println("Start updating " + type);
-  });
-  
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
-  
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");
-    } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");
-    } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");
-    } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");
-    } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");
-    }
-  });
-
-  ArduinoOTA.begin();
-  Serial.println("OTA Ready");
-  Serial.print("OTA Hostname: ");
-  Serial.println(OTA_HOSTNAME);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("");
+    Serial.println("Failed to connect to WiFi. Check credentials.");
+  }
 }
 
 void reconnect() {
-  // Loop até estar conectado
   while (!client.connected()) {
-    // 1. Verifica se o WiFi ainda está ativo
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("WiFi lost, re-establishing...");
       setup_wifi(); 
@@ -171,29 +256,39 @@ void reconnect() {
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("Heart Rate Monitor (MQTT Sender) with OTA Initializing...");
+  Serial.println("Heart Rate Monitor (MQTT Sender) with OTA WiFi Config Initializing...");
 
   randomSeed((unsigned long)ESP.getEfuseMac());
 
-  // I2C para Sensor
+  // 1. Carrega configurações salvas
+  loadConfig();
+
+  // 2. I2C para Sensor
   Wire.begin(21, 22);
   
-  // 1. Configuração WiFi
+  // 3. Configuração WiFi
   setup_wifi();
 
-  // 2. Configuração OTA (NOVO!)
-  setup_ota();
+  // 4. Configuração Web Server OTA
+  server.on("/", handleRoot);
+  server.on("/save", HTTP_POST, handleSave);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started on port 80");
+  Serial.print("Access: http://");
+  Serial.print(WiFi.localIP());
+  Serial.println(" or http://pulse-sender.local");
 
-  // 3. Configuração MQTT
-  client.setServer(MQTT_SERVER, MQTT_PORT);
+  // 5. Configuração MQTT
+  client.setServer(MQTT_SERVER.c_str(), MQTT_PORT);
 
-  // 4. Inicialização do Pino do LED
+  // 6. Inicialização do Pino do LED
   pinMode(LED_PIN, OUTPUT);
   
-  // 5. Inicialização do Sensor
+  // 7. Inicialização do Sensor
   if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) 
   {
-    Serial.println("MAX30105 was not found. Please check wiring/power. ");
+    Serial.println("MAX30105 was not found. Please check wiring/power.");
     while (1);
   }
   Serial.println("Place your index finger on the sensor with steady pressure.");
@@ -209,8 +304,8 @@ void setup()
 
 void loop()
 {
-  // 0. Handle OTA (NOVO! - deve ser chamado constantemente)
-  ArduinoOTA.handle();
+  // 0. Processa requisições do Web Server
+  server.handleClient();
 
   // 1. Manter a Conexão MQTT Ativa
   if (!client.connected()) {
@@ -218,12 +313,10 @@ void loop()
   }
   client.loop(); 
 
-  // LEITURA DO SENSOR 
+  // 2. LEITURA DO SENSOR 
   long irValue = particleSensor.getIR();
 
-  // *******************************************************
-  // *** 2. CÁLCULO DO BPM ***
-  // *******************************************************
+  // 3. CÁLCULO DO BPM
   if (checkForBeat(irValue) == true)
   {
     unsigned long delta = micros() - lastBeat;
@@ -250,11 +343,7 @@ void loop()
     }
   }
 
-  // *******************************************************
-  // *** 3. CONTROLE DO PULSO (Ritmo e Fade) ***
-  // *******************************************************
-  
-  // A. Ritmo do Pulso
+  // 4. CONTROLE DO PULSO (Ritmo e Fade)
   if (beatAvg > 20)  
   {
     long requiredInterval = 60000 / beatAvg; 
@@ -268,7 +357,6 @@ void loop()
     }
   }
   
-  // B. Gerenciamento do Fade (Não-Bloqueante)
   if (fadeAmount != 0 && (micros() - lastFadeTime >= PULSE_SPEED_US))
   {
       lastFadeTime = micros(); 
@@ -288,9 +376,7 @@ void loop()
       analogWrite(LED_PIN, ledBrightness);
   }
 
-  // *******************************************************
-  // *** 4. PUBLICAÇÃO MQTT (Temporizada) ***
-  // *******************************************************
+  // 5. PUBLICAÇÃO MQTT (Temporizada)
   unsigned long now = millis();
   if (now - lastMsg > MQTT_INTERVAL) {
     lastMsg = now;

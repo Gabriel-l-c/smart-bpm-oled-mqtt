@@ -1,0 +1,223 @@
+╔══════════════════════════════════════════════════════════════════╗
+║           SISTEMA OTA WiFi - PULSE MONITOR                       ║
+║                  DIAGRAMA DE FUNCIONAMENTO                       ║
+╚══════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│  PRIMEIRA VEZ - UPLOAD INICIAL VIA USB                          │
+└─────────────────────────────────────────────────────────────────┘
+
+    Arduino IDE
+        │
+        │ USB Cable
+        ↓
+    ┌───────┐
+    │ ESP32 │ ← Carrega código com credenciais padrão
+    └───────┘
+        │
+        ↓
+    Conecta WiFi: "ERUS 2.4GHz"
+    IP: 192.168.0.105
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│  FLUXO DE ATUALIZAÇÃO OTA (Sem cabo, via WiFi)                  │
+└─────────────────────────────────────────────────────────────────┘
+
+    Computador/Celular
+    (na mesma rede WiFi)
+        │
+        │ HTTP Request
+        ↓
+    ┌────────────────────────────┐
+    │  http://pulse-sender.local │  ← Web Server no ESP32
+    │  ou http://192.168.0.105   │
+    └────────────────────────────┘
+        │
+        ↓
+    ┌────────────────────────────┐
+    │   PÁGINA WEB BONITA 🎨     │
+    │                            │
+    │  📝 Formulário:            │
+    │  - SSID: [________]        │
+    │  - Senha: [________]       │
+    │  - MQTT IP: [________]     │
+    │                            │
+    │  [💾 Salvar e Reiniciar]   │
+    └────────────────────────────┘
+        │
+        │ POST /save
+        ↓
+    ┌────────────────────────────┐
+    │   ESP32 PROCESSA           │
+    │                            │
+    │  1. Recebe dados           │
+    │  2. Salva na EEPROM        │
+    │  3. Reinicia               │
+    └────────────────────────────┘
+        │
+        ↓
+    ┌────────────────────────────┐
+    │   NOVO BOOT                │
+    │                            │
+    │  1. Lê EEPROM              │
+    │  2. Carrega novas configs  │
+    │  3. Conecta nova WiFi      │
+    │  4. Conecta novo MQTT      │
+    └────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│  ESTRUTURA DA MEMÓRIA (EEPROM/Preferences)                      │
+└─────────────────────────────────────────────────────────────────┘
+
+    Namespace: "wifi-config"
+    
+    ┌──────────────┬─────────────────────┐
+    │ Chave        │ Valor Exemplo       │
+    ├──────────────┼─────────────────────┤
+    │ ssid         │ "ERUS 2.4GHz"       │
+    │ password     │ "ultrabots3"        │
+    │ mqtt_server  │ "192.168.0.110"     │
+    └──────────────┴─────────────────────┘
+    
+    ⚠️ Persiste mesmo após desligar!
+    ⚠️ Sobrevive a uploads de código!
+    ⚠️ Só apaga com preferences.clear()
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│  EXEMPLO DE USO PRÁTICO                                         │
+└─────────────────────────────────────────────────────────────────┘
+
+SITUAÇÃO: Você mudou de roteador
+
+┌─────────────────┐
+│ ANTES           │
+├─────────────────┤
+│ SSID: ERUS      │
+│ Senha: ultra3   │
+│ IP: 192.168.0.X │
+└─────────────────┘
+        │
+        │ Mudou roteador
+        ↓
+┌─────────────────┐
+│ AGORA           │
+├─────────────────┤
+│ SSID: Casa_5G   │
+│ Senha: nova123  │
+│ IP: 192.168.1.X │
+└─────────────────┘
+
+SEM OTA:
+  ❌ Reconectar ESP32 no computador
+  ❌ Abrir Arduino IDE
+  ❌ Editar código fonte
+  ❌ Compilar (demora!)
+  ❌ Upload via USB
+  ⏱️ Tempo: ~5 minutos
+
+COM OTA:
+  ✅ Abrir navegador
+  ✅ Acessar http://pulse-sender.local
+  ✅ Digitar novas credenciais
+  ✅ Clicar "Salvar"
+  ⏱️ Tempo: ~30 segundos! 🚀
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│  ARQUITETURA DO SISTEMA                                         │
+└─────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────────────────────────────────┐
+    │         ESP32 SENDER (Sensor)           │
+    │  ┌────────────┐  ┌─────────────────┐   │
+    │  │ MAX30105   │  │  Web Server     │   │
+    │  │ Heart Rate │  │  Port 80        │   │
+    │  │ Sensor     │  │  OTA Config     │   │
+    │  └─────┬──────┘  └────────┬────────┘   │
+    │        │                  │             │
+    │        │  ┌───────────────┴────────┐    │
+    │        └──┤  Main Loop             │    │
+    │           │  - Read Sensor         │    │
+    │           │  - Calculate BPM       │    │
+    │           │  - Publish MQTT        │    │
+    │           │  - Handle Web Requests │    │
+    │           └────────────────────────┘    │
+    └───────────────────┬─────────────────────┘
+                        │
+                        │ WiFi
+                        ↓
+              ┌──────────────────┐
+              │  MQTT Broker     │
+              │  (Mosquitto)     │
+              │  192.168.0.110   │
+              └─────────┬────────┘
+                        │
+                        │ MQTT Topic: health/bpm
+                        ↓
+    ┌─────────────────────────────────────────┐
+    │      ESP32 RECEIVER (Display)           │
+    │  ┌────────────┐  ┌─────────────────┐   │
+    │  │ OLED       │  │  Web Server     │   │
+    │  │ SSD1306    │  │  Port 80        │   │
+    │  │ Display    │  │  OTA Config     │   │
+    │  └─────┬──────┘  └────────┬────────┘   │
+    │        │                  │             │
+    │        │  ┌───────────────┴────────┐    │
+    │        └──┤  Main Loop             │    │
+    │           │  - Subscribe MQTT      │    │
+    │           │  - Update Display      │    │
+    │           │  - Pulse LED           │    │
+    │           │  - Handle Web Requests │    │
+    │           └────────────────────────┘    │
+    └─────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│  CÓDIGO PRINCIPAL - O QUE MUDOU                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+ANTES:
+    const char* WIFI_SSID = "ERUS 2.4GHz";  // Hard-coded ❌
+
+AGORA:
+    String WIFI_SSID = "ERUS 2.4GHz";       // Variável ✅
+    
+    void loadConfig() {
+        preferences.begin("wifi-config", false);
+        if (preferences.isKey("ssid")) {
+            WIFI_SSID = preferences.getString("ssid");
+        }
+        preferences.end();
+    }
+    
+    void setup() {
+        loadConfig();           // Carrega da memória
+        setup_wifi();           // Conecta
+        server.begin();         // Inicia Web Server
+        // ...
+    }
+    
+    void loop() {
+        server.handleClient();  // Processa requisições web
+        // ... resto do código
+    }
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│  VANTAGENS DO SISTEMA                                           │
+└─────────────────────────────────────────────────────────────────┘
+
+✅ Sem cabo USB necessário
+✅ Sem Arduino IDE necessário
+✅ Atualização remota
+✅ Interface amigável (web)
+✅ Configurável por qualquer pessoa
+✅ Funciona de celular/tablet
+✅ Configurações persistentes
+✅ Fallback para padrão se falhar
+✅ mDNS para acesso fácil
+✅ Feedback visual (OLED no receiver)
+
