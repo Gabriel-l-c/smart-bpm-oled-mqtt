@@ -1,5 +1,5 @@
-Projeto de desenvolvimento de um dispositivo de detecçaõ de batimentos cardicos e envio para painal via IoT.
+Projeto de desenvolvimento de um dispositivo de detecção de batimentos cardíacos e envio para painel via IoT.
 
-O objetivo e usar copomponentes genericos e reciclados para construcao do projeto. 
+O objetivo e usar componentes genéricos e reciclados para construção do projeto. 
 
-Foi ultilizado sensor de pulso max3XXXX, baterias reclicadas de outros dispositivos e esp32 dev kit genericos.
+Foi utilizado sensor de pulso max3XXXX, baterias recicladas de outros dispositivos e esp32 dev kit genéricos.
