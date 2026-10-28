@@ -6,7 +6,7 @@ Foi utilizado sensor de pulso max3XXXX, baterias recicladas de outros dispositiv
 
 
 
-!\[Foto do Projeto](Docs/FT/heartbeat.jpg)
+![Foto do Projeto](Docs/FT/heartbeat.jpg)
 
 
 
